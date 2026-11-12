@@ -1,61 +1,46 @@
 # go-assessment-asana
 
-A small Go command that exports the **users** and **projects** from every Asana
-workspace your personal access token can see. It writes them as JSON snapshots
-to `users.json` and `projects.json`. It can run once or keep running on a fixed
-interval.
-
----
+This tool exports the users and projects from your Asana workspaces into two
+JSON files. You can run it once, or leave it running so it refreshes the files
+every 30 seconds or every 5 minutes.
 
 ## Getting started
 
-### Prerequisites
+You need Go 1.27.3 or newer and an Asana
+[personal access token](https://developers.asana.com/docs/personal-access-token).
 
-- Go **1.27.3** or newer (see `go.mod`)
-- An Asana [personal access token](https://developers.asana.com/docs/personal-access-token)
+### 1. Add your token
 
-### 1. Provide the token
-
-The program reads `ASANA_PERSONAL_ACCESS_TOKEN`. You can set it in one of two
-ways.
-
-**Option A: a `.env` file** in the directory you run from (git ignores it).
-[`.env.example`](.env.example) is a committed template with dummy values that lists
-every required secret:
+Copy the example file and put your token in it:
 
 ```sh
-cp .env.example .env   # then replace the dummy token with your real one
+cp .env.example .env
 ```
 
 ```dotenv
-ASANA_PERSONAL_ACCESS_TOKEN=1/1234567890:abcdef...
+ASANA_PERSONAL_ACCESS_TOKEN=your-token-here
 ```
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ASANA_PERSONAL_ACCESS_TOKEN` | yes | Asana personal access token used as the `Bearer` credential. |
+`.env` is git-ignored, so your token stays on your machine. You can also skip
+the file and export the variable in your shell instead. If you do both, the
+shell variable wins.
 
-**Option B: the environment**:
-
-```sh
-export ASANA_PERSONAL_ACCESS_TOKEN=1/1234567890:abcdef...
-```
-
-If both are set, the **environment variable wins**. The `.env` file is
-optional, and if it is missing the program just uses the environment.
+`ASANA_PERSONAL_ACCESS_TOKEN` is the only setting the tool needs.
 
 ### 2. Run it
 
 ```sh
-# Extract once into ./dist and exit
 go run ./cmd/asana
+```
 
-# Or build a binary first
+Or build it first:
+
+```sh
 go build -o asana ./cmd/asana
 ./asana
 ```
 
-On success you get:
+When it's done, you'll find the results in `dist/`:
 
 ```
 dist/
@@ -66,59 +51,37 @@ dist/
 ### 3. Keep it running (optional)
 
 ```sh
-./asana -interval=30sec        # refresh every 30 seconds
-./asana -interval=5min -v      # refresh every 5 minutes, with debug logs
+./asana -interval=30sec
+./asana -interval=5min -v
 ```
 
-Stop it with `Ctrl-C` (SIGINT) or SIGTERM. It shuts down cleanly. A run that is
-in progress is cancelled, and the previous output files stay intact.
+Press `Ctrl-C` to stop it. If you stop it in the middle of a run, your previous
+files are left as they were.
 
----
+## Command-line options
 
-## Command-line arguments
+| Option | Default | What it does |
+|--------|---------|--------------|
+| `-env` | `.env` | The `.env` file to read. It's fine if the file doesn't exist. |
+| `-out` | `dist` | The folder to write the JSON files to. It's created if needed. |
+| `-interval` | none | Run repeatedly: `30sec` or `5min`. Leave it out to run once. |
+| `-v` | off | Show extra detail, such as how long each run took. |
+| `-h` | | Show help. |
 
-| Flag        | Default | Description |
-|-------------|---------|-------------|
-| `-env`      | `.env`  | Path to the `.env` file to load. A missing file is not an error. |
-| `-out`      | `dist`  | Directory where `users.json` and `projects.json` are written. It is created if it doesn't exist. |
-| `-interval` | *(empty)* | Repeat the extraction. Accepted values are `30sec` and `5min` (case-insensitive). Leave it empty to run once and exit. |
-| `-v`        | `false` | Verbose mode. Logs at debug level: scheduling interval, per-run timings, per-workspace counts and skipped runs. |
-| `-h`        |         | Print usage. |
-
-Examples:
+For example:
 
 ```sh
 ./asana -env=/etc/asana/prod.env -out=/var/lib/asana
 ./asana -interval=5min -out=./snapshots -v
 ```
 
-### Exit codes
+The tool exits with `0` on success, `1` if something went wrong (for example,
+no token or an API error), and `2` if an option is invalid. When it runs on an
+interval, a failed run is logged and it simply tries again next time.
 
-| Code | Meaning |
-|------|---------|
-| `0`  | Success. In interval mode, this means a clean shutdown on a signal. |
-| `1`  | Runtime error. For example, the token is missing, the `.env` file is malformed, an API call failed in run-once mode, or a write failed. |
-| `2`  | Invalid flags. For example, an unsupported `-interval` value. |
+## What the files look like
 
-In interval mode a failed run is **logged and the schedule continues**. It
-doesn't exit the program.
-
-### Logging
-
-Logs are written to **stderr** in `log/slog` text format. Info level reports
-each saved file and its record count. Debug level (`-v`) adds scheduling
-details.
-
-```
-level=INFO msg=saved file=dist/users.json records=42
-level=INFO msg=saved file=dist/projects.json records=17
-```
-
----
-
-## Output format
-
-Both files share the same envelope:
+Both files have the same shape:
 
 ```json
 {
@@ -127,13 +90,12 @@ Both files share the same envelope:
 }
 ```
 
-- `lastUpdatedAt` is the Unix time in seconds when the data was fetched. Both
-  files from the same run carry the same value.
-- `results` is always an array. An empty result is `[]`, never `null`.
+`lastUpdatedAt` is when the run started, in Unix seconds, so the data is at
+least that fresh. Both files from the same run share the same value. `results` is always a list, even when it's
+empty.
 
-**`users.json`**: users are de-duplicated across workspaces. A user who belongs
-to several workspaces appears once, and those workspaces are listed in
-`workspaces`.
+Each user appears once, even if they belong to several workspaces. Their
+workspaces are listed inside the record:
 
 ```json
 {
@@ -144,7 +106,7 @@ to several workspaces appears once, and those workspaces are listed in
 }
 ```
 
-**`projects.json`**:
+A project looks like this:
 
 ```json
 {
@@ -155,13 +117,13 @@ to several workspaces appears once, and those workspaces are listed in
 }
 ```
 
-> `dist/` contains names and emails and is git-ignored. Don't commit it.
+`dist/` holds real names and emails, so it's git-ignored. Please don't commit
+it.
 
-### Sample run (real output)
+### Example from a real run
 
-This is the actual output of `./asana` against a personal Asana workspace
-("My workspace": 2 users, 4 projects), captured on 2026-11-12 at 12:44:53 UTC
-(`lastUpdatedAt: 1794487493`).
+Here's what a real run against a personal workspace produced on
+2026-11-12 at 12:44:53 UTC: 2 users and 4 projects.
 
 **`dist/users.json`**
 
@@ -241,213 +203,53 @@ This is the actual output of `./asana` against a personal Asana workspace
 }
 ```
 
----
-
 ## Development
 
+Run the tests:
+
 ```sh
-go test ./...                                          # unit tests (offline)
-go test -race ./...                                    # with the race detector
-go test -tags integration ./internal/client/ -v        # live tests against Asana
+go test ./...
+go test -race ./...
 go vet ./...
 ```
 
-The integration tests read the token from the environment or from the
-repository-root `.env`. They are skipped if no token is available.
+There are also live tests that call the real Asana API. They use your token
+from `.env` and are skipped if there isn't one:
 
-Contributors and coding agents follow the rules in [`AGENTS.md`](AGENTS.md).
-`CLAUDE.md` imports the same file. The main rule is that this README is updated
-in the same change as any significant design or code change.
-
-### Project layout
-
-```
-cmd/asana/            CLI entry point: flags, logger, signals, wiring
-internal/client/      Asana REST client (pagination, rate limiting, errors)
-internal/config/      Settings from the environment and .env (godotenv)
-internal/extract/     One extraction run: fetch everything, then write snapshots
-internal/scheduler/   Fixed-interval runner with no overlap and skipped catch-up
-internal/storage/     Atomic JSON file writes
+```sh
+go test -tags integration ./internal/client/ -v
 ```
 
-Data flow:
+### How the code is organized
 
 ```
-main ──► config.Load ──► client.New ──► extract.New
-                                            │
-              interval == 0 ──► Extractor.Run (once)
-              interval  > 0 ──► scheduler.Run(Extractor.Run)
-                                            │
-                     client: workspaces ► users + projects per workspace
-                                            │
-                     storage.WriteJSON ► users.json, projects.json
+cmd/asana/            the command: reads options, starts a run or the schedule
+internal/config/      reads the token from the environment or .env (godotenv)
+internal/client/      talks to the Asana API, follows pages, stays under 150 requests/min
+internal/extract/     one run: streams users and projects into both files
+internal/scheduler/   repeats a run on a fixed interval
+internal/storage/     writes JSON files safely
 ```
 
-A **single `client.Client`** lives for the whole process. Its rate limiter
-therefore covers every scheduled run together, not each run separately.
+A few choices worth knowing about:
 
----
+- **Streaming, so memory stays flat.** Users and projects are written to disk
+  page by page while they're still being fetched, so a huge workspace doesn't
+  need more memory than a small one. If writing falls behind, fetching waits.
+- **All or nothing.** Each file is written to a temporary file first. Only when
+  both are complete are they renamed into place, one right after the other. If
+  anything fails halfway, both temporary files are thrown away and the old
+  files stay as they were. Anyone reading a file sees either the old version or
+  the new one, never half of each.
+- **One rate limit for the whole process.** Asana allows 150 requests per
+  minute. The tool uses one API client for its whole lifetime, so scheduled
+  runs share that budget. The limiter counts requests over any rolling minute,
+  so it never sends a burst across a minute boundary.
+- **No pile-ups.** If a run takes longer than the interval, the missed runs are
+  skipped instead of running back to back. Runs never overlap.
+- **No automatic retries.** If Asana rejects a request, the run fails and the
+  next scheduled run tries again.
 
-## Package reference
-
-### `internal/client`
-
-A minimal Asana REST API client built on `net/http`. It has no third-party
-dependencies.
-
-**Construction**
-
-```go
-c, err := client.New(token,
-    client.WithBaseURL("https://app.asana.com/api/1.0"), // default; override in tests
-    client.WithHTTPClient(&http.Client{Timeout: 30 * time.Second}),
-    client.WithPageSize(100),                   // 1–100, default 100
-    client.WithRateLimit(150, time.Minute),     // default 150 req/min
-)
-```
-
-`New` rejects an empty token. Each option validates its own input. For example,
-the base URL must be absolute, the HTTP client must be non-nil and the page size
-must be in range.
-
-**Resources** (`resources.go`)
-
-| Method | Endpoint | Notes |
-|--------|----------|-------|
-| `ListWorkspaces(ctx)` | `GET /workspaces` | All workspaces visible to the token. |
-| `ListUsers(ctx, wsGID)` | `GET /users?workspace=…` | `opt_fields=name,email,workspaces.name` |
-| `EachUsersPage(ctx, wsGID, fn)` | same | Streams one page at a time, so memory stays constant. |
-| `ListProjects(ctx, wsGID)` | `GET /projects?workspace=…` | `opt_fields=name,archived,workspace.name` |
-| `EachProjectsPage(ctx, wsGID, fn)` | same | Streams one page at a time. |
-
-The `List*` / `Each*` methods return an error if the workspace GID is empty.
-Returning an error from an `Each*` callback stops pagination and returns that
-error. The types are `Workspace`, `User` and `Project`, and their JSON tags match
-the output format above.
-
-**Pagination.** Asana uses offset pagination. Each response's
-`next_page.offset` is sent back as `?offset=`, and a `null` or absent
-`next_page` marks the last page. As a safety net, if the server ever returns an
-offset it has already returned, the client fails instead of looping forever.
-
-**Rate limiting.** A **sliding-window** limiter guarantees that no more than
-*n* requests *start* within any rolling window. Unlike a token bucket with a
-burst of *n*, it can never let 2*n* requests through around a window boundary.
-It keeps a ring buffer of the last *n* start times, and a new request waits
-until `window` has passed since the slot it replaces. Slots are reserved under
-a mutex before sleeping, so concurrent callers queue fairly. The wait respects
-context cancellation.
-
-**Errors.** A non-2xx response becomes an `*APIError`:
-
-```go
-type APIError struct {
-    StatusCode int
-    Messages   []string      // from Asana's {"errors":[{"message":…}]}
-    RetryAfter time.Duration // parsed from Retry-After on 429
-}
-```
-
-Use `errors.As(err, &apiErr)` to inspect it. The client does **not** retry
-automatically. `RetryAfter` is available to callers that want to retry.
-
----
-
-### `internal/config`
-
-Loads runtime settings.
-
-```go
-cfg, err := config.Load(".env")
-// cfg.AsanaToken
-```
-
-- The `.env` file is parsed with
-  [`github.com/joho/godotenv`](https://github.com/joho/godotenv). That parser
-  supports comments, `export` prefixes, quoted and multi-line values, and
-  escapes.
-- Variables that are already set in the process environment are **never
-  overridden**.
-- A missing `.env` file is not an error. A malformed one is.
-- `Load` fails if `ASANA_PERSONAL_ACCESS_TOKEN` (`config.TokenEnvVar`) is empty
-  after loading. Surrounding whitespace is trimmed.
-
----
-
-### `internal/extract`
-
-Performs one complete extraction.
-
-```go
-ex, err := extract.New(c, "dist", logger) // logger may be nil
-err = ex.Run(ctx)
-```
-
-`Run`:
-
-1. Lists all workspaces.
-2. For each workspace, lists its users and projects.
-3. De-duplicates users by GID, because a user in several workspaces is returned
-   once per workspace.
-4. Stamps both snapshots with a single `lastUpdatedAt`.
-5. Writes `users.json` and then `projects.json` through `storage.WriteJSON`.
-
-**Everything is fetched before anything is written.** An API failure in the
-middle of a run therefore never leaves one file fresh and the other stale. The
-previous snapshots stay untouched. Errors are wrapped with context, for example
-`list users in workspace 123: …`.
-
-Exports: `UsersFile`, `ProjectsFile` and the generic `Snapshot[T]` envelope
-type.
-
-The `Extractor` is designed to be reused across scheduled runs, so the
-underlying client and its rate limiter are shared.
-
----
-
-### `internal/scheduler`
-
-Runs a `Job func(ctx) error` at a fixed interval.
-
-```go
-s, err := scheduler.New(5*time.Minute, ex.Run,
-    scheduler.WithName("extract"),
-    scheduler.WithLogger(logger),
-)
-err = s.Run(ctx) // blocks until ctx is cancelled; returns nil
-```
-
-Guarantees:
-
-- **Immediate first run**, then one run on every interval boundary. Boundaries
-  are anchored to the start time, so they don't drift with run duration.
-- **No overlap.** The next run starts only after the previous one returns.
-- **Missed runs are skipped, not replayed.** If a run overruns one or more
-  boundaries, the scheduler jumps to the next future boundary in one step. A
-  slow, rate-limited run therefore can't snowball into a burst of back-to-back
-  runs.
-- **No busy loop.** The sleep between runs is always strictly positive.
-- **Resilient.** A job error or panic is logged at Error level and the schedule
-  continues.
-- **Prompt shutdown.** Cancelling the context interrupts both the sleep and a
-  context-aware job, and `Run` returns `nil`.
-
-`New` rejects a non-positive interval and a nil job. The clock and sleep
-functions are injectable inside the package, so the tests run deterministically
-without real waiting.
-
----
-
-### `internal/storage`
-
-```go
-err := storage.WriteJSON("dist/users.json", v)
-```
-
-Writes `v` as indented JSON:
-
-- Creates parent directories (`0755`) as needed.
-- Writes are **atomic**. Data goes to a temp file in the same directory
-  (`.users.json.<random>.tmp`), which is `fsync`ed, set to `0644` and then
-  `rename`d over the target. Readers never see a partial file. If a write
-  fails, the temp file is removed and the previous file is preserved.
+Contributors and coding agents follow the rules in [`AGENTS.md`](AGENTS.md),
+which `CLAUDE.md` also loads. The main rule: update this README whenever you
+make a significant design or code change.
