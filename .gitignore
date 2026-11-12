@@ -1,0 +1,42 @@
+# --- Secrets ---------------------------------------------------------------
+# Asana personal access token lives here; never commit it.
+.env
+.env.*
+*.env
+!.env.example
+
+# --- Exported data ---------------------------------------------------------
+# Output of `go run ./cmd/asana` (contains user names and emails).
+dist/
+
+# --- Go build & test artifacts ---------------------------------------------
+# Binaries from `go build` (e.g. ./asana) and cross-compiled outputs.
+/asana
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+# Coverage profiles and reports.
+*.coverprofile
+coverage.*
+cover.html
+# Local workspace files (go work init); not shared across machines.
+go.work
+go.work.sum
+
+# --- Temp files ------------------------------------------------------------
+# Leftovers from an interrupted storage.WriteJSON (.<name>.<random>.tmp).
+*.tmp
+*.swp
+*~
+
+# --- Editors & OS ----------------------------------------------------------
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
