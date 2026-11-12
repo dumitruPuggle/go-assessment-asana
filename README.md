@@ -90,8 +90,8 @@ Both files have the same shape:
 }
 ```
 
-`lastUpdatedAt` is when the run started, in Unix seconds, so the data is at
-least that fresh. Both files from the same run share the same value. `results` is always a list, even when it's
+`lastUpdatedAt` is when the run finished fetching from Asana, in Unix seconds.
+Both files from the same run share the same value. `results` is always a list, even when it's
 empty.
 
 Each user appears once, even if they belong to several workspaces. Their
@@ -226,21 +226,26 @@ go test -tags integration ./internal/client/ -v
 cmd/asana/            the command: reads options, starts a run or the schedule
 internal/config/      reads the token from the environment or .env (godotenv)
 internal/client/      talks to the Asana API, follows pages, stays under 150 requests/min
-internal/extract/     one run: streams users and projects into both files
+internal/extract/     one run: fetches users and projects, then writes both files
 internal/scheduler/   repeats a run on a fixed interval
 internal/storage/     writes JSON files safely
 ```
 
 A few choices worth knowing about:
 
-- **Streaming, so memory stays flat.** Users and projects are written to disk
-  page by page while they're still being fetched, so a huge workspace doesn't
-  need more memory than a small one. If writing falls behind, fetching waits.
-- **All or nothing.** Each file is written to a temporary file first. Only when
-  both are complete are they renamed into place, one right after the other. If
-  anything fails halfway, both temporary files are thrown away and the old
-  files stay as they were. Anyone reading a file sees either the old version or
-  the new one, never half of each.
+- **Simple over streaming.** Each run keeps all users and projects in memory,
+  then writes each file in one go. That's simple and fast for workspaces of a
+  normal size. A page-by-page streaming writer was tried and removed because it
+  added more complexity than this project needs. Memory grows with the number
+  of records, so very large workspaces (around a million records) would need it
+  back.
+- **Fetch everything, then write.** Nothing is written until every Asana
+  request in the run has succeeded, so a failed request leaves both old files
+  as they were. Each file is written to a temporary file and then renamed into
+  place, so anyone reading it sees either the old version or the new one, never
+  half of either. `users.json` is replaced first, then `projects.json`. If
+  writing `projects.json` fails (for example, the disk is full), `users.json`
+  will already be new.
 - **One rate limit for the whole process.** Asana allows 150 requests per
   minute. The tool uses one API client for its whole lifetime, so scheduled
   runs share that budget. The limiter counts requests over any rolling minute,
