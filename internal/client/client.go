@@ -158,34 +158,50 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, out any
 	return "", nil
 }
 
-// listAll follows Asana offset pagination until exhausted: each response's
-// next_page.offset is sent back as the offset query parameter, and a null or
-// absent next_page marks the last page.
-func listAll[T any](ctx context.Context, c *Client, path string, query url.Values) ([]T, error) {
+// eachPage follows Asana offset pagination until exhausted, calling fn with
+// each page as it arrives: each response's next_page.offset is sent back as
+// the offset query parameter, and a null or absent next_page marks the last
+// page. Only one page is held in memory at a time. If fn returns an error,
+// pagination stops and that error is returned.
+func eachPage[T any](ctx context.Context, c *Client, path string, query url.Values, fn func([]T) error) error {
 	if query == nil {
 		query = url.Values{}
 	}
 	query.Set("limit", fmt.Sprint(c.pageSize))
 
-	var all []T
 	seen := map[string]bool{}
 	for {
 		var page []T
 		offset, err := c.get(ctx, path, query, &page)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		all = append(all, page...)
+		if err := fn(page); err != nil {
+			return err
+		}
 		if offset == "" {
-			return all, nil
+			return nil
 		}
 		// Guard against a server bug looping us forever on the same page.
 		if seen[offset] {
-			return nil, fmt.Errorf("GET %s: pagination repeated offset %q", path, offset)
+			return fmt.Errorf("GET %s: pagination repeated offset %q", path, offset)
 		}
 		seen[offset] = true
 		query.Set("offset", offset)
 	}
+}
+
+// listAll collects every page into one slice. Prefer eachPage for large sets.
+func listAll[T any](ctx context.Context, c *Client, path string, query url.Values) ([]T, error) {
+	var all []T
+	err := eachPage(ctx, c, path, query, func(page []T) error {
+		all = append(all, page...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return all, nil
 }
 
 // rateLimiter is a sliding-window limiter: it guarantees no more than n

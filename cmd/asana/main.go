@@ -1,98 +1,107 @@
-// Command asana fetches the projects in every Asana workspace visible to the
-// personal access token in ASANA_PERSONAL_ACCESS_TOKEN and saves them to
+// Command asana extracts users and projects from every Asana workspace
+// visible to ASANA_PERSONAL_ACCESS_TOKEN into <out>/users.json and
 // <out>/projects.json.
+//
+// Usage:
+//
+//	asana                    # extract once and exit
+//	asana -interval=30sec    # extract every 30 seconds until Ctrl-C
+//	asana -interval=5min -v  # every 5 minutes, with debug logs
 package main
 
 import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/dumitruPuggle/go-assessment-asana/internal/client"
 	"github.com/dumitruPuggle/go-assessment-asana/internal/config"
-	"github.com/dumitruPuggle/go-assessment-asana/internal/storage"
+	"github.com/dumitruPuggle/go-assessment-asana/internal/extract"
+	"github.com/dumitruPuggle/go-assessment-asana/internal/scheduler"
 )
+
+// intervals are the supported -interval values.
+var intervals = map[string]time.Duration{
+	"30sec": 30 * time.Second,
+	"5min":  5 * time.Minute,
+}
 
 func main() {
 	envFile := flag.String("env", ".env", "path to .env file")
-	outDir := flag.String("out", "dist", "directory to write projects.json into")
+	outDir := flag.String("out", "dist", "directory to write users.json and projects.json into")
+	intervalFlag := flag.String("interval", "", "repeat the extraction: 30sec or 5min (default: run once)")
+	verbose := flag.Bool("v", false, "verbose: log scheduling interval and run timings")
 	flag.Parse()
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	logger := newLogger(*verbose)
+
+	interval, err := parseInterval(*intervalFlag)
+	if err != nil {
+		logger.Error(err.Error())
+		flag.Usage()
+		os.Exit(2)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, *envFile, *outDir); err != nil {
-		log.Fatal(err)
+	if err := run(ctx, logger, *envFile, *outDir, interval); err != nil {
+		logger.Error(err.Error())
+		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, envFile, outDir string) error {
+func newLogger(verbose bool) *slog.Logger {
+	level := slog.LevelInfo
+	if verbose {
+		level = slog.LevelDebug
+	}
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+}
+
+// parseInterval maps the -interval flag to a duration; "" means run once.
+func parseInterval(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+	if d, ok := intervals[strings.ToLower(strings.TrimSpace(s))]; ok {
+		return d, nil
+	}
+	return 0, fmt.Errorf("invalid -interval %q: must be 30sec or 5min", s)
+}
+
+func run(ctx context.Context, logger *slog.Logger, envFile, outDir string, interval time.Duration) error {
 	cfg, err := config.Load(envFile)
 	if err != nil {
 		return err
 	}
+	// One client for the whole process, so its rate limiter (150 req/min)
+	// covers every scheduled run together, not each run separately.
 	c, err := client.New(cfg.AsanaToken)
 	if err != nil {
 		return err
 	}
-	return export(ctx, c, outDir)
-}
-
-// export fetches users and projects across all workspaces and writes them to
-// outDir/users.json and outDir/projects.json. Everything is fetched before
-// anything is written, so an API failure never leaves a mix of fresh and
-// stale files.
-func export(ctx context.Context, c *client.Client, outDir string) error {
-	workspaces, err := c.ListWorkspaces(ctx)
+	ex, err := extract.New(c, outDir, logger)
 	if err != nil {
-		return fmt.Errorf("list workspaces: %w", err)
+		return err
 	}
 
-	// Non-nil so empty results encode as [] rather than null.
-	users := []client.User{}
-	projects := []client.Project{}
-	seenUsers := map[string]bool{}
-
-	for _, ws := range workspaces {
-		us, err := c.ListUsers(ctx, ws.GID)
-		if err != nil {
-			return fmt.Errorf("list users in workspace %s: %w", ws.GID, err)
-		}
-		// A user in several workspaces is returned once per workspace;
-		// keep one entry (its Workspaces field already lists them all).
-		for _, u := range us {
-			if !seenUsers[u.GID] {
-				seenUsers[u.GID] = true
-				users = append(users, u)
-			}
-		}
-
-		ps, err := c.ListProjects(ctx, ws.GID)
-		if err != nil {
-			return fmt.Errorf("list projects in workspace %s: %w", ws.GID, err)
-		}
-		projects = append(projects, ps...)
-
-		log.Printf("workspace %q: %d users, %d projects", ws.Name, len(us), len(ps))
+	if interval == 0 {
+		return ex.Run(ctx)
 	}
 
-	for _, f := range []struct {
-		name  string
-		data  any
-		count int
-	}{
-		{"users.json", users, len(users)},
-		{"projects.json", projects, len(projects)},
-	} {
-		path := filepath.Join(outDir, f.name)
-		if err := storage.WriteJSON(path, f.data); err != nil {
-			return err
-		}
-		log.Printf("saved %d records to %s", f.count, path)
+	s, err := scheduler.New(interval, ex.Run,
+		scheduler.WithName("extract"),
+		scheduler.WithLogger(logger),
+	)
+	if err != nil {
+		return err
 	}
-	return nil
+	return s.Run(ctx)
 }

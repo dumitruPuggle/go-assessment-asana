@@ -265,3 +265,54 @@ func TestContextCanceled(t *testing.T) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }
+
+func TestEachProjectsPageDeliversPagesAsTheyArrive(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("offset") {
+		case "":
+			fmt.Fprint(w, `{"data":[{"gid":"p1"},{"gid":"p2"}],"next_page":{"offset":"o1"}}`)
+		case "o1":
+			fmt.Fprint(w, `{"data":[{"gid":"p3"}]}`)
+		}
+	}, WithPageSize(2))
+
+	var sizes []int
+	err := c.EachProjectsPage(context.Background(), "ws1", func(page []Project) error {
+		sizes = append(sizes, len(page))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(sizes) != "[2 1]" {
+		t.Fatalf("page sizes = %v, want [2 1]", sizes)
+	}
+}
+
+func TestEachUsersPageStopsWhenCallbackFails(t *testing.T) {
+	calls := 0
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		fmt.Fprintf(w, `{"data":[{"gid":"u%d"}],"next_page":{"offset":"o%d"}}`, calls, calls)
+	})
+
+	stop := errors.New("stop")
+	err := c.EachUsersPage(context.Background(), "ws1", func([]User) error { return stop })
+	if !errors.Is(err, stop) {
+		t.Fatalf("err = %v, want callback error", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1 (no further pages after callback error)", calls)
+	}
+}
+
+func TestEachPageRequiresWorkspace(t *testing.T) {
+	c, _ := New(testToken)
+	noop := func([]User) error { return nil }
+	if err := c.EachUsersPage(context.Background(), "", noop); err == nil {
+		t.Error("EachUsersPage: expected error for empty workspace")
+	}
+	if err := c.EachProjectsPage(context.Background(), "", func([]Project) error { return nil }); err == nil {
+		t.Error("EachProjectsPage: expected error for empty workspace")
+	}
+}

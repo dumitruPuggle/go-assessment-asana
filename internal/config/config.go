@@ -3,12 +3,13 @@
 package config
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"strings"
+
+	"github.com/joho/godotenv"
 )
 
 // TokenEnvVar is the environment variable holding the Asana personal access token.
@@ -32,39 +33,14 @@ func Load(envFile string) (Config, error) {
 	return Config{AsanaToken: token}, nil
 }
 
-// loadDotEnv parses simple KEY=VALUE lines. Blank lines and # comments are
-// ignored; an optional "export " prefix and surrounding quotes are stripped.
+// loadDotEnv loads path via godotenv, which never overrides variables that
+// are already set. A missing file is not an error.
 func loadDotEnv(path string) error {
-	f, err := os.Open(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+	if err := godotenv.Load(path); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("load %s: %w", path, err)
 	}
-	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
-	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
-	for line := 1; sc.Scan(); line++ {
-		text := strings.TrimSpace(sc.Text())
-		if text == "" || strings.HasPrefix(text, "#") {
-			continue
-		}
-		text = strings.TrimPrefix(text, "export ")
-		key, val, ok := strings.Cut(text, "=")
-		if !ok {
-			return fmt.Errorf("%s:%d: expected KEY=VALUE", path, line)
-		}
-		key = strings.TrimSpace(key)
-		val = strings.TrimSpace(val)
-		if len(val) >= 2 && (val[0] == '"' || val[0] == '\'') && val[len(val)-1] == val[0] {
-			val = val[1 : len(val)-1]
-		}
-		if _, set := os.LookupEnv(key); !set {
-			if err := os.Setenv(key, val); err != nil {
-				return fmt.Errorf("set %s: %w", key, err)
-			}
-		}
-	}
-	return sc.Err()
+	return nil
 }
